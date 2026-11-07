@@ -1,0 +1,3 @@
+cfd6ee8a0022c4db16f6a0786efa9bb4717f3b4e8244505f92eaa5891853f091  wr1502x-openwrt-bringup-candidate.zip
+49ade965a6c142462f73e50cd7664a5b84f20a3e361bb90fa17f173d425d67a2  wr1502x-openwrt-kernel-cs6c.bin
+45c5da5c44edea658339e4aa498edf290837b1806dbf54ed1a69468639a41f9b  wr1502x-openwrt-rootfs-r6cr.bin
