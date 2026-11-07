@@ -1,0 +1,34 @@
+name: Validate WR1502X candidate
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'artifacts/2026-11-07/**'
+      - '.github/workflows/validate-candidate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify required candidate files and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir=artifacts/2026-11-07
+          test -s "$dir/wr1502x-openwrt-bringup-candidate.zip"
+          sha256sum --check "$dir/SHA256SUMS.txt"
+          unzip -t "$dir/wr1502x-openwrt-bringup-candidate.zip"
+          unzip -l "$dir/wr1502x-openwrt-bringup-candidate.zip"
+          grep -q 'NOT A STOCK WEB-UPDATER IMAGE' "$dir/README.txt"
+      - name: Upload experimental candidate bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: wr1502x-openwrt-bringup-candidate
+          path: artifacts/2026-11-07/wr1502x-openwrt-bringup-candidate.zip
+          if-no-files-found: error
+          retention-days: 90
