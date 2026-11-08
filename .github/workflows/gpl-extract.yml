@@ -96,6 +96,19 @@ jobs:
             grep -rnIE --include='*.sh' --include='Makefile*' --include='*.mk' --include='*.mak' --include='*.c' --include='*.h' \
               -e 'cvimg' -e '0x80a00000|0x80A00000' -e '0x00?300000|0xD00000|0x00D00000' -e 'bootbank|BOOT_BANK|DUAL_BANK|DUALBANK' -e 'rtkn_parts|rtl8197_parts|mtd_partition' . 2>/dev/null | head -400 || true
           } > "$OUT/layout-hints.txt"
+          # TP-Link product layer (Iplatform): product configs and anything that
+          # sets the flash bank / bootinfo / dual-image symbols for the kernel.
+          mkdir -p "$OUT/configs/product"
+          find . -path '*product_configs/wr1502x*' -type f -size -2M -exec cp --parents {} "$OUT/configs/product/" \;
+          {
+            echo "### dual image / bootinfo / flash layout symbols across the whole GPL tree"
+            grep -rnI -E 'WRT_BARRIER_BREAKER|RTK_BOOTINFO|BOOTINFO_DUALIMAGE|DUALIMAGE_FLASH_OFFSET|DUAL_IMAGE_OFFSET|RTL_LINUX_IMAGE_OFFSET|RTL_ROOT_IMAGE_OFFSET|RTL_FLASH_SIZE|USERDEFINE_FLASH_BANK' \
+              --exclude-dir=dl --exclude='*.o' . 2>/dev/null | grep -v '/linux-4.4/drivers/mtd/nand/rtkn_nand/rtknflash_openwrt.c' | head -600 || true
+            echo; echo "### kernel config fragments in the Iplatform layer"
+            grep -rlI -E '^CONFIG_RTL_8197F|^CONFIG_RTL_FLASH_MAPPING_ENABLE|^CONFIG_SPI_NAND_FLASH' --exclude-dir=dl . 2>/dev/null | grep -v '/rtl8197/boards/' | head -100 || true
+          } > "$OUT/product-hints.txt"
+          grep -rlI -E '^CONFIG_RTL_8197F|^CONFIG_RTL_FLASH_MAPPING_ENABLE|^CONFIG_SPI_NAND_FLASH' --exclude-dir=dl . 2>/dev/null | grep -v '/rtl8197/boards/' | head -50 \
+            | while read -r f; do cp --parents "$f" "$OUT/configs/product/"; done
           tar -cJf "$OUT/configs.tar.xz" -C "$OUT" configs config-files.txt
           rm -rf "$OUT/configs"
           xz -9 "$OUT/gpl-file-list.txt"
