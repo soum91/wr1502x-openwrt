@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Rev3 (2026-11-07), artifacts/2026-11-07-rev3
+
+Target: TP-Link TL-WR1502X V1.0 US. NOT flashable, not boot-tested.
+
+- Kernel rebuilt from TP-Link's GPL (vendor Linux 4.4.176, Realtek MSDK-6.4.1) by `.github/workflows/kernel-build.yml`, board config `SPINAND_RTL8197F_VG_8832BR_8367R_KERN44_GW`. Only config change: `CONFIG_OVERLAY_FS=y`.
+- Stock cmdline restored: `console=ttyS0,38400 root=/dev/mtdblock3`.
+- Kernel packaged by the SDK's rtkload/cvimg: `cr6c`, load 0x80A00000, burn 0x00900000 (was 0x00300000). sha256 42fb059a54a2e6ff5a985e078386863062feba78a4a5db3e5be79174edc4edc8.
+- Rootfs (rev2 contents) rewrapped at the stock burn address 0x00E00000 (was 0x00D00000), start 0x000F0000 per SDK mkimg. sha256 5cbdf1c26e687070578218f027e3d6cfb34e5f9176890979e0b7fab720c4c7ab.
+- Still no rootfs_data partition: overlay is RAM-backed and not persistent.
+
 ### Rootfs rev2 (2026-11-07), artifacts/2026-11-07-rev2
 
 Target: TP-Link TL-WR1502X V1.0 US. Still NOT flashable, not boot-tested.
