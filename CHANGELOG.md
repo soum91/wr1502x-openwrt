@@ -22,6 +22,12 @@ Target: TP-Link TL-WR1502X V1.0 US. Still NOT flashable, not boot-tested.
 - `artifacts/2026-11-07/openwrt-21.02.diffconfig` header still refers to "MR1500X" / `DEVICE_adslr_g7`; it was carried over from another build and needs checking.
 - `validate-candidate.yml` expects `artifacts/2026-11-07/wr1502x-openwrt-bringup-candidate.zip`, which is not in the repo, so that workflow fails as committed.
 
+### GPL findings (2026-11-07)
+
+- GPL extract workflow now also collects TP-Link product configs and flash-layout symbols.
+- Rev1 and rev2 burn addresses (0x300000 / 0xD00000) contradict the GPL: kernel belongs at 0x800000 to 0x900000, rootfs at 0xE00000. 0x300000 is the bootinfo (active bank) offset inside the boot partition. Writing rev1/rev2 as-is risks a brick. Details in docs/PORTING_STATUS.md.
+- Rev1 kernel dropped `root=/dev/mtdblock3` from the built-in cmdline and changed the console from 38400 to 115200.
+
 ### Rev1 (2026-11-07)
 
 - Added initial WR1502X V1.0 US OpenWrt bring-up status and experimental artifact packaging.
