@@ -1,0 +1,155 @@
+name: Kernel build
+
+# Builds the TL-WR1502X V1 vendor kernel (Linux 4.4.176, Realtek RTL8197F SDK)
+# from TP-Link's GPL tarball with TP-Link's own board config, plus the changes
+# OpenWrt needs (overlayfs). Keeps the stock cmdline (root=/dev/mtdblock3,
+# console 38400) and the SDK's own rtkload/cvimg packaging so load and burn
+# addresses come from the vendor build, not from guesses.
+#
+# Logs, SDK notes and any outputs are published as release "kernel-build"
+# whether or not the build succeeds.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/kernel-build.yml
+      - kernel/**
+
+permissions:
+  contents: write
+
+env:
+  GPL_URL: https://static.tp-link.com/upload/gpl-code/2024/202406/20240624/GPL_TL-WR1502Xv1.tar.gz
+  GPL_SHA256: 9efe1123e8f92a00398c7170691daff59355abf06cfe145de58900b74947d4a3
+  MODEL: SPINAND_RTL8197F_VG_8832BR_8367R_KERN44_GW
+  WORK: /mnt/gpl
+  OUT: /mnt/out
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host setup
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -q
+          sudo apt-get install -y -q build-essential bc flex bison gawk lzma xz-utils \
+            libncurses-dev zlib1g-dev libssl-dev squashfs-tools file \
+            libc6:i386 libstdc++6:i386 zlib1g:i386 libncurses5:i386 || true
+          sudo mkdir -p "$WORK" "$OUT" && sudo chown -R "$USER" "$WORK" "$OUT"
+          df -h / /mnt
+
+      - name: Download and extract GPL
+        run: |
+          cd "$WORK"
+          curl -fL --retry 5 --retry-delay 10 -o gpl.tar.gz "$GPL_URL"
+          echo "$GPL_SHA256  gpl.tar.gz" | sha256sum -c - || { sha256sum gpl.tar.gz; echo "WARN: GPL hash differs from the extract run"; }
+          mkdir -p tree && tar -xzf gpl.tar.gz -C tree && rm -f gpl.tar.gz
+          for level in 1 2 3; do
+            found=0
+            while IFS= read -r -d '' a; do
+              found=1; d="${a%.*}.x"; mkdir -p "$d"
+              case "$a" in
+                *.tar.gz|*.tgz)   tar -xzf "$a" -C "$d" ;;
+                *.tar.bz2|*.tbz2) tar -xjf "$a" -C "$d" ;;
+                *.tar.xz|*.txz)   tar -xJf "$a" -C "$d" ;;
+                *.tar)            tar -xf  "$a" -C "$d" ;;
+                *.zip)            unzip -q "$a" -d "$d" ;;
+              esac && rm -f "$a" || echo "WARN: failed $a"
+            done < <(find tree -type f \( -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar.bz2' -o -name '*.tbz2' -o -name '*.tar.xz' -o -name '*.txz' -o -name '*.tar' -o -name '*.zip' \) -size +1M -print0)
+            [ "$found" = 1 ] || break
+          done
+          SDK=$(dirname "$(find tree -path '*/rtl8197/Makefile' -print -quit)")
+          echo "SDK=$WORK/$SDK" >> "$GITHUB_ENV"
+          echo "SDK at $SDK"; df -h /mnt
+
+      - name: SDK notes (build docs, targets, packaging scripts)
+        if: always()
+        run: |
+          cd "$SDK"
+          {
+            for f in INSTALL.txt README.txt; do echo "##### $f"; cat "$f" 2>/dev/null; done
+            echo "##### rtl8197/.config"; cat .config
+            echo "##### rtl8197/Makefile targets"; grep -nE '^[A-Za-z0-9_.%/-]+ *:' Makefile | head -150
+            echo "##### rtl8197/Makefile (first 200 lines)"; head -200 Makefile
+            echo "##### boards/rtl8197F/Makefile"; cat boards/rtl8197F/Makefile 2>/dev/null | head -300
+            echo "##### preconfig"; cat "boards/rtl8197F/preconfig_${MODEL/KERN44/Kernel4.4}" 2>/dev/null | head -100
+            echo "##### boards/rtl8197F/tools/mkimg"; cat boards/rtl8197F/tools/mkimg 2>/dev/null
+            echo "##### toolchain"; ls toolchain; ls toolchain/*/bin | head -80
+            file toolchain/*/bin/*gcc 2>/dev/null | head
+            echo "##### dangling symlinks in linux-4.4"; find linux-4.4 -xtype l -printf '%p -> %l\n' | head -50
+          } > "$OUT/sdk-notes.txt" 2>&1
+          wc -l "$OUT/sdk-notes.txt"
+
+      - name: Apply kernel config changes
+        run: |
+          cd "$SDK"
+          C="boards/rtl8197F/config.linux-4.4.$MODEL"
+          cp "$C" "$OUT/config.stock"
+          # OpenWrt needs overlayfs for a writable root (mount_root).
+          sed -i '/CONFIG_OVERLAY_FS[ =]/d' "$C"
+          echo 'CONFIG_OVERLAY_FS=y' >> "$C"
+          # Any extra fragments committed under kernel/config.fragment
+          if [ -f "$GITHUB_WORKSPACE/kernel/config.fragment" ]; then
+            while IFS= read -r line; do
+              sym=$(echo "$line" | sed -nE 's/^(# )?(CONFIG_[A-Za-z0-9_]+).*/\2/p'); [ -n "$sym" ] || continue
+              sed -i "/^$sym=/d;/^# $sym is not set/d" "$C"; echo "$line" >> "$C"
+            done < "$GITHUB_WORKSPACE/kernel/config.fragment"
+          fi
+          diff "$OUT/config.stock" "$C" | tee "$OUT/config.diff" || true
+          # dtc in 4.4.176 breaks on modern host gcc (duplicate yylloc)
+          f=linux-4.4/scripts/dtc/dtc-lexer.lex.c_shipped
+          [ -f "$f" ] && sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/' "$f" || true
+
+      - name: Build (SDK flow)
+        id: build
+        continue-on-error: true
+        run: |
+          cd "$SDK"
+          set -o pipefail
+          TC=$(ls -d "$PWD"/toolchain/msdk-6.4.1-*/bin | head -1)
+          export PATH="$TC:$PATH"
+          echo "toolchain: $TC"
+          # 1) let the SDK set up target/ and the kernel .config for the selected model
+          ( yes "" | make silentconfig || yes "" | make oldconfig || true ) 2>&1 | tail -200 > "$OUT/build-config.log"
+          # 2) kernel only
+          ( make linux V=1 || make -C linux-4.4 ARCH=mips CROSS_COMPILE=mips-linux- -j"$(nproc)" ) 2>&1 | tee "$OUT/build-kernel.log" | tail -50
+
+      - name: Collect outputs
+        if: always()
+        run: |
+          cd "$SDK"
+          K=linux-4.4
+          cp "$K/.config" "$OUT/config.built" 2>/dev/null || true
+          for f in "$K/rtkload/linux.bin" "$K/rtkload/nfjrom" "$K/vmlinux" "$K/System.map" "$K/rtkload/system.map"; do
+            [ -f "$f" ] && cp "$f" "$OUT/$(basename "$f")"
+          done
+          [ -f "$OUT/vmlinux" ] && xz -9 "$OUT/vmlinux"
+          if [ -f "$OUT/linux.bin" ]; then
+            od -A x -t x1z -N 16 "$OUT/linux.bin" > "$OUT/linux.bin.header.txt"
+            strings -n 8 "$OUT/linux.bin" | grep -m3 -E 'console=|root=' >> "$OUT/linux.bin.header.txt" || true
+          fi
+          grep -E 'CONFIG_(OVERLAY_FS|CMDLINE|RTL_LINUX_IMAGE_OFFSET|RTL_ROOT_IMAGE_OFFSET|RTL_FLASH_SIZE|SQUASHFS)' "$OUT/config.built" > "$OUT/config.summary.txt" 2>/dev/null || true
+          (cd "$OUT" && sha256sum $(ls | grep -v SHA256SUMS) > SHA256SUMS.txt)
+          ls -l "$OUT"
+
+      - name: Publish release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$OUT"
+          gh release delete kernel-build --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create kernel-build --repo "$GITHUB_REPOSITORY" --prerelease \
+            --title "TL-WR1502X V1 kernel build (overlayfs, stock layout)" \
+            --notes "Build outcome: ${{ steps.build.outcome }}. Vendor Linux 4.4.176 from TP-Link GPL, model $MODEL, stock cmdline, CONFIG_OVERLAY_FS=y. NOT FLASH-TESTED. See config.diff, build-kernel.log, linux.bin.header.txt." \
+            ./*
+
+      - name: Fail if build failed
+        if: steps.build.outcome != 'success'
+        run: exit 1
