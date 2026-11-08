@@ -1,0 +1,17 @@
+# WR1502X bring-up: the vendor 4.4 kernel has no overlayfs, so mount_root
+# cannot create a writable overlay. Put /etc on its own tmpfs so config,
+# passwords and dropbear host keys work. Nothing persists across reboots.
+
+ram_etc_fallback() {
+	if touch /etc/.rw_test 2>/dev/null; then
+		rm -f /etc/.rw_test
+		return 0
+	fi
+	echo "- no writable overlay, using RAM-backed /etc (changes lost on reboot) -"
+	mkdir -p /tmp/.etc_ram
+	mount -t tmpfs -o mode=0755 tmpfs /tmp/.etc_ram || return 1
+	cp -a /etc/. /tmp/.etc_ram/ || return 1
+	mount -o move /tmp/.etc_ram /etc
+}
+
+boot_hook_add preinit_main ram_etc_fallback

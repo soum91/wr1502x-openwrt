@@ -15,6 +15,12 @@ Updated: 2026-11-07
 - Kernel and rootfs fit the observed partition sizes, but the dual-bank map is community-derived and has not been confirmed on this physical unit.
 - Neither component has been boot-tested. This is not a TP-Link-signed updater image and not yet a usable router firmware.
 
+## Kernel gaps found in the rev1 kernel (2026-11-07)
+
+- No overlayfs: OpenWrt cannot get a writable root. Rootfs rev2 works around this with a RAM-backed /etc (non-persistent). Real fix: rebuild with `CONFIG_OVERLAY_FS=y` plus a `rootfs_data` partition.
+- No `root=` in the built-in cmdline and no IKCONFIG; the root device depends on the Realtek flash map in the vendor tree.
+- Stock 1.1.1 updater image is signed and encrypted, so stock addresses must come from the GPL tree or a UART log.
+
 ## Outstanding validation
 
 1. Capture UART boot output from this exact router and verify bootargs, active bank, and MTD table.

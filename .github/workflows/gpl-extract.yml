@@ -1,0 +1,117 @@
+name: GPL extract
+
+# Downloads TP-Link's TL-WR1502X v1 GPL tarball, finds the Linux 4.4 kernel
+# tree(s) and any kernel configs / flash layout hints, and publishes the
+# useful bits as a release so they can be pulled without moving 4 GB around.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/gpl-extract.yml
+
+permissions:
+  contents: write
+
+env:
+  GPL_URL: https://static.tp-link.com/upload/gpl-code/2024/202406/20240624/GPL_TL-WR1502Xv1.tar.gz
+  WORK: /mnt/gpl
+  OUT: /mnt/out
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo mkdir -p "$WORK" "$OUT" && sudo chown -R "$USER" "$WORK" "$OUT"
+          df -h / /mnt
+
+      - name: Download GPL tarball
+        run: |
+          cd "$WORK"
+          curl -fL --retry 5 --retry-delay 10 -o gpl.tar.gz "$GPL_URL"
+          ls -l gpl.tar.gz
+          sha256sum gpl.tar.gz | tee "$OUT/gpl-sha256.txt"
+
+      - name: Extract (including nested archives, 3 levels)
+        run: |
+          cd "$WORK"
+          mkdir -p tree
+          tar -xzf gpl.tar.gz -C tree
+          rm -f gpl.tar.gz
+          for level in 1 2 3; do
+            found=0
+            while IFS= read -r -d '' a; do
+              found=1
+              d="${a%.*}.x"; mkdir -p "$d"
+              case "$a" in
+                *.tar.gz|*.tgz)   tar -xzf "$a" -C "$d" ;;
+                *.tar.bz2|*.tbz2) tar -xjf "$a" -C "$d" ;;
+                *.tar.xz|*.txz)   tar -xJf "$a" -C "$d" ;;
+                *.tar)            tar -xf  "$a" -C "$d" ;;
+                *.zip)            unzip -q "$a" -d "$d" ;;
+              esac && rm -f "$a" || echo "WARN: failed $a"
+            done < <(find tree -type f \( -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar.bz2' -o -name '*.tbz2' -o -name '*.tar.xz' -o -name '*.txz' -o -name '*.tar' -o -name '*.zip' \) -size +1M -print0)
+            [ "$found" = 1 ] || break
+            df -h /mnt
+          done
+          find tree -type f | sed "s|^tree/||" | sort > "$OUT/gpl-file-list.txt"
+          wc -l "$OUT/gpl-file-list.txt"
+
+      - name: Find kernel trees
+        run: |
+          cd "$WORK/tree"
+          : > "$OUT/kernel-trees.txt"
+          while IFS= read -r mk; do
+            v=$(awk '/^VERSION =/{a=$3}/^PATCHLEVEL =/{b=$3}/^SUBLEVEL =/{c=$3}END{print a"."b"."c}' "$mk")
+            echo "$v $(dirname "$mk")" | tee -a "$OUT/kernel-trees.txt"
+          done < <(grep -rlE --include=Makefile '^PATCHLEVEL = ' . | while read -r f; do head -5 "$f" | grep -q '^VERSION = ' && echo "$f"; done)
+
+          n=0
+          grep -E '^4\.4\.' "$OUT/kernel-trees.txt" | while read -r v dir; do
+            n=$((n+1))
+            name="kernel-$v-$n"
+            tar --exclude='*.o' --exclude='*.ko' --exclude='.tmp_*' -cJf "$OUT/$name.tar.xz" -C "$(dirname "$dir")" "$(basename "$dir")"
+            echo "$name <- $dir" >> "$OUT/kernel-trees.txt"
+          done
+          ls -l "$OUT"
+
+      - name: Collect configs and flash layout hints
+        run: |
+          cd "$WORK/tree"
+          mkdir -p "$OUT/configs"
+          find . -type f \( -name '.config' -o -name '*defconfig*' -o -name 'config-4.4*' -o -name 'config.linux*' -o -iname '*8197*config*' \) -size -2M \
+            | tee "$OUT/config-files.txt" \
+            | while read -r f; do
+                dst="$OUT/configs/$(echo "${f#./}" | tr '/' '_')"
+                cp "$f" "$dst"
+              done
+          {
+            echo "### overlayfs / squashfs / root options in configs"
+            grep -HE 'CONFIG_(OVERLAY_FS|SQUASHFS|SQUASHFS_XZ|JFFS2_FS|UBIFS_FS|CMDLINE|RTL_FLASH|RTL_.*ROOT|MTD_CMDLINE_PARTS|IKCONFIG)' "$OUT"/configs/* || true
+            echo; echo "### flash offsets / load address / cvimg usage in scripts and makefiles"
+            grep -rnIE --include='*.sh' --include='Makefile*' --include='*.mk' --include='*.mak' --include='*.c' --include='*.h' \
+              -e 'cvimg' -e '0x80a00000|0x80A00000' -e '0x00?300000|0xD00000|0x00D00000' -e 'bootbank|BOOT_BANK|DUAL_BANK|DUALBANK' -e 'rtkn_parts|rtl8197_parts|mtd_partition' . 2>/dev/null | head -400 || true
+          } > "$OUT/layout-hints.txt"
+          tar -cJf "$OUT/configs.tar.xz" -C "$OUT" configs config-files.txt
+          rm -rf "$OUT/configs"
+          xz -9 "$OUT/gpl-file-list.txt"
+          ls -l "$OUT"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$OUT"
+          # split anything over 1.9 GB (GitHub asset limit is 2 GB)
+          for f in *; do
+            if [ "$(stat -c%s "$f")" -gt 1900000000 ]; then split -b 1900M -d "$f" "$f.part" && rm "$f"; fi
+          done
+          gh release delete gpl-extract --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create gpl-extract --repo "$GITHUB_REPOSITORY" \
+            --title "TP-Link TL-WR1502X v1 GPL extract" \
+            --notes "Kernel tree(s), kernel configs and flash layout hints pulled from TP-Link's GPL_TL-WR1502Xv1.tar.gz by the GPL extract workflow. See kernel-trees.txt and layout-hints.txt." \
+            ./*
