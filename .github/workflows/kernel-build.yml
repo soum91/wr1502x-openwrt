@@ -118,7 +118,11 @@ jobs:
           # 1) let the SDK set up target/ and the kernel .config for the selected model
           ( yes "" | make silentconfig || yes "" | make oldconfig || true ) 2>&1 | tail -200 > "$OUT/build-config.log"
           # 2) kernel only
-          ( make linux V=1 || make -C linux-4.4 ARCH=mips CROSS_COMPILE=mips-linux- -j"$(nproc)" ) 2>&1 | tee "$OUT/build-kernel.log" | tail -50
+          ( make linux V=1 || make -C linux-4.4 ARCH=mips CROSS_COMPILE=msdk-linux- -j"$(nproc)" ) 2>&1 | tee "$OUT/build-kernel.log" | tail -50
+          # 3) SDK packaging: rtkload (LZMA loader at LOAD_START_ADDR) + cvimg with
+          #    FLASH_OFFSET = CONFIG_RTL_LINUX_IMAGE_OFFSET, producing rtkload/linux.bin
+          make -C linux-4.4/rtkload CROSS_COMPILE=msdk-linux- V=1 2>&1 | tee "$OUT/build-rtkload.log" | tail -40
+          test -f linux-4.4/rtkload/linux.bin
 
       - name: Collect outputs
         if: always()
