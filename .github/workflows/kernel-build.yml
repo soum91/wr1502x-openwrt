@@ -130,9 +130,11 @@ jobs:
           cd "$SDK"
           K=linux-4.4
           cp "$K/.config" "$OUT/config.built" 2>/dev/null || true
-          for f in "$K/rtkload/linux.bin" "$K/rtkload/nfjrom" "$K/vmlinux" "$K/System.map" "$K/rtkload/system.map"; do
+          for f in "$K/rtkload/linux.bin" "$K/rtkload/nfjrom" "$K/vmlinux" "$K/System.map"; do
             [ -f "$f" ] && cp "$f" "$OUT/$(basename "$f")"
           done
+          # GitHub asset names are case-insensitive: keep rtkload's map distinct from System.map
+          [ -f "$K/rtkload/system.map" ] && cp "$K/rtkload/system.map" "$OUT/rtkload-system.map"
           [ -f "$OUT/vmlinux" ] && xz -9 "$OUT/vmlinux"
           if [ -f "$OUT/linux.bin" ]; then
             od -A x -t x1z -N 16 "$OUT/linux.bin" > "$OUT/linux.bin.header.txt"
